@@ -39,8 +39,9 @@ asan: clean $(TARGET)
 san: ubsan
 
 test: $(TARGET)
-	@echo "Running test suite..."
+	@echo "Running all phase test suites..."
 	@bash tests/test_phase1.sh
+	@bash tests/test_phase2.sh
 
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)
