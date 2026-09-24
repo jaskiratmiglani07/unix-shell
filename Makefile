@@ -42,6 +42,7 @@ test: $(TARGET)
 	@echo "Running all phase test suites..."
 	@bash tests/test_phase1.sh
 	@bash tests/test_phase2.sh
+	@bash tests/test_phase3.sh
 
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)
