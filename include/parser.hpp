@@ -26,9 +26,19 @@ struct Command {
     }
 };
 
+struct Pipeline {
+    std::vector<Command> commands;
+    bool background{false};
+
+    bool empty() const {
+        return commands.empty() || (commands.size() == 1 && commands[0].empty());
+    }
+};
+
 class Parser {
 public:
-    static Command parse_line(const std::string& line);
+    static Command parse_command(const std::string& cmd_str);
+    static Pipeline parse_line(const std::string& line);
 };
 
 } // namespace aegissh

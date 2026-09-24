@@ -52,13 +52,13 @@ int Shell::run() {
             break;
         }
 
-        Command cmd = Parser::parse_line(line);
-        if (cmd.empty()) {
+        Pipeline pipeline = Parser::parse_line(line);
+        if (pipeline.empty()) {
             continue;
         }
 
         bool should_exit = false;
-        last_status_ = Executor::execute(cmd, last_status_, should_exit);
+        last_status_ = Executor::execute_pipeline(pipeline, last_status_, should_exit);
 
         if (should_exit) {
             running_ = false;

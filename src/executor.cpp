@@ -49,7 +49,7 @@ static bool apply_redirections(const std::vector<Redirection>& redirs) {
     return true;
 }
 
-int Executor::execute(const Command& cmd, int last_status, bool& should_exit) {
+int Executor::execute_command(const Command& cmd, int last_status, bool& should_exit) {
     if (cmd.empty()) {
         return 0;
     }
@@ -67,7 +67,6 @@ int Executor::execute(const Command& cmd, int last_status, bool& should_exit) {
         FdGuard guard_in(s_in), guard_out(s_out), guard_err(s_err);
 
         if (!apply_redirections(cmd.redirections)) {
-            // Restore immediately
             if (guard_in.valid()) dup2(guard_in.get(), STDIN_FILENO);
             if (guard_out.valid()) dup2(guard_out.get(), STDOUT_FILENO);
             if (guard_err.valid()) dup2(guard_err.get(), STDERR_FILENO);
@@ -80,7 +79,6 @@ int Executor::execute(const Command& cmd, int last_status, bool& should_exit) {
         fflush(stdout);
         fflush(stderr);
 
-        // Restore descriptors
         if (guard_in.valid()) dup2(guard_in.get(), STDIN_FILENO);
         if (guard_out.valid()) dup2(guard_out.get(), STDOUT_FILENO);
         if (guard_err.valid()) dup2(guard_err.get(), STDERR_FILENO);
@@ -88,7 +86,7 @@ int Executor::execute(const Command& cmd, int last_status, bool& should_exit) {
         return rc;
     }
 
-    // 2. External command execution via fork/exec/waitpid
+    // 2. External single command execution via fork/exec/waitpid
     pid_t pid = fork();
     if (pid < 0) {
         print_sys_error("fork");
@@ -96,7 +94,7 @@ int Executor::execute(const Command& cmd, int last_status, bool& should_exit) {
     }
 
     if (pid == 0) {
-        // --- CHILD PROCESS ---
+        // Child
         if (!apply_redirections(cmd.redirections)) {
             _exit(1);
         }
@@ -105,7 +103,6 @@ int Executor::execute(const Command& cmd, int last_status, bool& should_exit) {
             _exit(0);
         }
 
-        // Prepare null-terminated argv array for execvp
         std::vector<char*> c_argv;
         c_argv.reserve(cmd.args.size() + 1);
         for (const auto& arg : cmd.args) {
@@ -115,7 +112,6 @@ int Executor::execute(const Command& cmd, int last_status, bool& should_exit) {
 
         execvp(c_argv[0], c_argv.data());
 
-        // If execvp returns, it failed
         if (errno == ENOENT) {
             print_error(cmd.args[0], "command not found");
             _exit(127);
@@ -125,7 +121,6 @@ int Executor::execute(const Command& cmd, int last_status, bool& should_exit) {
         }
     }
 
-    // --- PARENT PROCESS ---
     int status = 0;
     while (true) {
         pid_t wpid = waitpid(pid, &status, 0);
@@ -146,6 +141,137 @@ int Executor::execute(const Command& cmd, int last_status, bool& should_exit) {
     }
 
     return 0;
+}
+
+int Executor::execute_pipeline(const Pipeline& pipeline, int last_status, bool& should_exit) {
+    should_exit = false;
+    if (pipeline.empty()) {
+        return 0;
+    }
+
+    if (pipeline.commands.size() == 1) {
+        return execute_command(pipeline.commands[0], last_status, should_exit);
+    }
+
+    // Multi-stage pipeline execution
+    size_t nstages = pipeline.commands.size();
+    std::vector<pid_t> pids(nstages, -1);
+    int in_fd = STDIN_FILENO;
+    int pipefds[2];
+
+    for (size_t i = 0; i < nstages; ++i) {
+        const Command& cmd = pipeline.commands[i];
+        int out_fd = STDOUT_FILENO;
+
+        if (i + 1 < nstages) {
+            if (pipe(pipefds) < 0) {
+                print_sys_error("pipe");
+                if (in_fd != STDIN_FILENO) close(in_fd);
+                return 1;
+            }
+            out_fd = pipefds[1];
+        }
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            print_sys_error("fork");
+            if (i + 1 < nstages) {
+                close(pipefds[0]);
+                close(pipefds[1]);
+            }
+            if (in_fd != STDIN_FILENO) close(in_fd);
+            return 1;
+        }
+
+        if (pid == 0) {
+            // Child stage
+            if (i + 1 < nstages) {
+                close(pipefds[0]); // Unused read end of next pipe
+            }
+
+            if (in_fd != STDIN_FILENO) {
+                if (dup2(in_fd, STDIN_FILENO) < 0) _exit(1);
+                close(in_fd);
+            }
+
+            if (out_fd != STDOUT_FILENO) {
+                if (dup2(out_fd, STDOUT_FILENO) < 0) _exit(1);
+                close(out_fd);
+            }
+
+            if (!apply_redirections(cmd.redirections)) {
+                _exit(1);
+            }
+
+            if (cmd.args.empty()) {
+                _exit(0);
+            }
+
+            // Builtins inside pipelines run in subshell
+            if (Builtins::is_builtin(cmd.args[0])) {
+                bool sub_exit = false;
+                int rc = Builtins::execute(cmd.args, last_status, sub_exit);
+                std::cout << std::flush;
+                std::cerr << std::flush;
+                fflush(stdout);
+                fflush(stderr);
+                _exit(rc & 0xFF);
+            }
+
+            std::vector<char*> c_argv;
+            c_argv.reserve(cmd.args.size() + 1);
+            for (const auto& arg : cmd.args) {
+                c_argv.push_back(const_cast<char*>(arg.c_str()));
+            }
+            c_argv.push_back(nullptr);
+
+            execvp(c_argv[0], c_argv.data());
+
+            if (errno == ENOENT) {
+                print_error(cmd.args[0], "command not found");
+                _exit(127);
+            } else {
+                print_sys_error(cmd.args[0]);
+                _exit(126);
+            }
+        }
+
+        // Parent stage cleanup
+        pids[i] = pid;
+
+        if (in_fd != STDIN_FILENO) {
+            close(in_fd);
+        }
+
+        if (i + 1 < nstages) {
+            close(pipefds[1]); // Close write end so reader receives EOF
+            in_fd = pipefds[0];
+        }
+    }
+
+    // Wait for all stages to prevent zombies and retrieve exit status of last stage
+    int last_stage_status = 0;
+    for (size_t i = 0; i < nstages; ++i) {
+        int status = 0;
+        while (true) {
+            pid_t wpid = waitpid(pids[i], &status, 0);
+            if (wpid < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            break;
+        }
+
+        if (i == nstages - 1) {
+            if (WIFEXITED(status)) {
+                last_stage_status = WEXITSTATUS(status);
+            } else if (WIFSIGNALED(status)) {
+                last_stage_status = 128 + WTERMSIG(status);
+            }
+        }
+    }
+
+    return last_stage_status;
 }
 
 } // namespace aegissh
