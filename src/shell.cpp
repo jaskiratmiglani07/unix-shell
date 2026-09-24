@@ -2,6 +2,7 @@
 #include "parser.hpp"
 #include "executor.hpp"
 #include "common.hpp"
+#include "jobs.hpp"
 
 #include <iostream>
 #include <unistd.h>
@@ -42,6 +43,10 @@ int Shell::run() {
     std::string line;
 
     while (running_) {
+        // Reap any background jobs that finished and print status notifications
+        JobManager::instance().reap_background_jobs();
+        JobManager::instance().print_completed_jobs();
+
         print_prompt();
 
         if (!std::getline(std::cin, line)) {

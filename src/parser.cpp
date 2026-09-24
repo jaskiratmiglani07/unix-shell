@@ -118,8 +118,17 @@ Pipeline Parser::parse_line(const std::string& line) {
     if (first == std::string::npos) {
         return pipeline; // empty
     }
-    size_t last = cleaned.find_last_not_of(" \t\r\n");
-    cleaned = cleaned.substr(first, last - first + 1);
+    // Check for trailing '&' background operator
+    if (!cleaned.empty() && cleaned.back() == '&') {
+        pipeline.background = true;
+        cleaned.pop_back();
+        // Trim again after removing '&'
+        size_t last = cleaned.find_last_not_of(" \t\r\n");
+        if (last == std::string::npos) {
+            return pipeline;
+        }
+        cleaned = cleaned.substr(0, last + 1);
+    }
 
     // Split by pipe character '|'
     std::vector<std::string> stage_strings;

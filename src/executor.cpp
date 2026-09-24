@@ -2,6 +2,7 @@
 #include "builtins.hpp"
 #include "common.hpp"
 #include "fd_guard.hpp"
+#include "jobs.hpp"
 #include <fcntl.h>
 
 namespace aegissh {
@@ -149,15 +150,27 @@ int Executor::execute_pipeline(const Pipeline& pipeline, int last_status, bool& 
         return 0;
     }
 
-    if (pipeline.commands.size() == 1) {
+    if (pipeline.commands.size() == 1 && !pipeline.background) {
         return execute_command(pipeline.commands[0], last_status, should_exit);
     }
 
-    // Multi-stage pipeline execution
     size_t nstages = pipeline.commands.size();
+    std::string cmdline;
+    for (size_t i = 0; i < nstages; ++i) {
+        for (const auto& a : pipeline.commands[i].args) {
+            if (!cmdline.empty()) cmdline += " ";
+            cmdline += a;
+        }
+        if (i + 1 < nstages) {
+            cmdline += " | ";
+        }
+    }
+
+    // Multi-stage pipeline / background execution
     std::vector<pid_t> pids(nstages, -1);
     int in_fd = STDIN_FILENO;
     int pipefds[2];
+    pid_t pgid = 0;
 
     for (size_t i = 0; i < nstages; ++i) {
         const Command& cmd = pipeline.commands[i];
@@ -184,6 +197,9 @@ int Executor::execute_pipeline(const Pipeline& pipeline, int last_status, bool& 
         }
 
         if (pid == 0) {
+            // Put child into pipeline process group
+            setpgid(0, pgid ? pgid : 0);
+
             // Child stage
             if (i + 1 < nstages) {
                 close(pipefds[0]); // Unused read end of next pipe
@@ -207,7 +223,7 @@ int Executor::execute_pipeline(const Pipeline& pipeline, int last_status, bool& 
                 _exit(0);
             }
 
-            // Builtins inside pipelines run in subshell
+            // Builtins inside pipelines or background run in subshell
             if (Builtins::is_builtin(cmd.args[0])) {
                 bool sub_exit = false;
                 int rc = Builtins::execute(cmd.args, last_status, sub_exit);
@@ -237,6 +253,8 @@ int Executor::execute_pipeline(const Pipeline& pipeline, int last_status, bool& 
         }
 
         // Parent stage cleanup
+        if (pgid == 0) pgid = pid;
+        setpgid(pid, pgid); // Avoid race condition with child setpgid
         pids[i] = pid;
 
         if (in_fd != STDIN_FILENO) {
@@ -249,7 +267,14 @@ int Executor::execute_pipeline(const Pipeline& pipeline, int last_status, bool& 
         }
     }
 
-    // Wait for all stages to prevent zombies and retrieve exit status of last stage
+    // Handle background job launch
+    if (pipeline.background) {
+        int job_id = JobManager::instance().add_job(pgid, pids, cmdline, JobState::RUNNING);
+        std::cout << "[" << job_id << "] " << pgid << "\n" << std::flush;
+        return 0;
+    }
+
+    // Foreground wait for all stages to prevent zombies
     int last_stage_status = 0;
     for (size_t i = 0; i < nstages; ++i) {
         int status = 0;

@@ -44,6 +44,7 @@ test: $(TARGET)
 	@bash tests/test_phase2.sh
 	@bash tests/test_phase3.sh
 	@bash tests/test_phase4.sh
+	@bash tests/test_phase5.sh
 
 clean:
 	rm -rf $(OBJ_DIR) $(BIN_DIR)
