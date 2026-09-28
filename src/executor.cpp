@@ -3,6 +3,7 @@
 #include "common.hpp"
 #include "fd_guard.hpp"
 #include "jobs.hpp"
+#include "signals.hpp"
 #include <fcntl.h>
 
 namespace aegissh {
@@ -96,6 +97,8 @@ int Executor::execute_command(const Command& cmd, int last_status, bool& should_
 
     if (pid == 0) {
         // Child
+        SignalHandler::reset_child_signals();
+
         if (!apply_redirections(cmd.redirections)) {
             _exit(1);
         }
@@ -124,7 +127,7 @@ int Executor::execute_command(const Command& cmd, int last_status, bool& should_
 
     int status = 0;
     while (true) {
-        pid_t wpid = waitpid(pid, &status, 0);
+        pid_t wpid = waitpid(pid, &status, WUNTRACED);
         if (wpid < 0) {
             if (errno == EINTR) {
                 continue;
@@ -135,7 +138,16 @@ int Executor::execute_command(const Command& cmd, int last_status, bool& should_
         break;
     }
 
-    if (WIFEXITED(status)) {
+    if (WIFSTOPPED(status)) {
+        std::string cmdline;
+        for (const auto& a : cmd.args) {
+            if (!cmdline.empty()) cmdline += " ";
+            cmdline += a;
+        }
+        int job_id = JobManager::instance().add_job(pid, {pid}, cmdline, JobState::STOPPED);
+        std::cout << "\n[" << job_id << "]+  Stopped                 " << cmdline << "\n" << std::flush;
+        return 128 + WSTOPSIG(status);
+    } else if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {
         return 128 + WTERMSIG(status);
@@ -197,6 +209,8 @@ int Executor::execute_pipeline(const Pipeline& pipeline, int last_status, bool& 
         }
 
         if (pid == 0) {
+            SignalHandler::reset_child_signals();
+
             // Put child into pipeline process group
             setpgid(0, pgid ? pgid : 0);
 
@@ -279,12 +293,18 @@ int Executor::execute_pipeline(const Pipeline& pipeline, int last_status, bool& 
     for (size_t i = 0; i < nstages; ++i) {
         int status = 0;
         while (true) {
-            pid_t wpid = waitpid(pids[i], &status, 0);
+            pid_t wpid = waitpid(pids[i], &status, WUNTRACED);
             if (wpid < 0) {
                 if (errno == EINTR) continue;
                 break;
             }
             break;
+        }
+
+        if (WIFSTOPPED(status)) {
+            int job_id = JobManager::instance().add_job(pgid, pids, cmdline, JobState::STOPPED);
+            std::cout << "\n[" << job_id << "]+  Stopped                 " << cmdline << "\n" << std::flush;
+            return 128 + WSTOPSIG(status);
         }
 
         if (i == nstages - 1) {

@@ -9,10 +9,13 @@
 #include <climits>
 #include <cstdlib>
 
+#include "signals.hpp"
+
 namespace aegissh {
 
 Shell::Shell() {
     interactive_ = (isatty(STDIN_FILENO) != 0);
+    SignalHandler::init_shell_signals();
 }
 
 std::string Shell::get_formatted_cwd() {
@@ -50,11 +53,24 @@ int Shell::run() {
         print_prompt();
 
         if (!std::getline(std::cin, line)) {
-            // EOF encountered (Ctrl+D)
-            if (interactive_) {
-                std::cout << "\n";
+            // Check for SIGINT first - on macOS, signal interruption during getline
+            // on a FIFO can set eofbit instead of failbit.
+            bool sigint_received = SignalHandler::check_and_clear_sigint();
+            
+            if (std::cin.eof() && !sigint_received) {
+                // Ctrl+D / real EOF (and not a spurious EOF from signal interruption)
+                if (interactive_) {
+                    std::cout << "\n";
+                }
+                break;
             }
-            break;
+            // getline was interrupted by a signal, or spurious EOF from signal.
+            if (sigint_received && interactive_) {
+                std::cout << "\n" << std::flush;
+            }
+            // Clear error state and restart the read loop.
+            std::cin.clear();
+            continue;
         }
 
         Pipeline pipeline = Parser::parse_line(line);
