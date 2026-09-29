@@ -1,89 +1,28 @@
 #include "parser.hpp"
+#include "expander.hpp"
 #include "common.hpp"
 #include <cctype>
 
 namespace aegissh {
 
-Command Parser::parse_command(const std::string& cmd_str) {
+Command Parser::parse_command(const std::string& cmd_str, int last_status) {
     Command cmd;
-    std::vector<std::string> raw_tokens;
-    std::string current;
-    bool in_token = false;
-
-    for (size_t i = 0; i < cmd_str.length(); ++i) {
-        char ch = cmd_str[i];
-
-        if (ch == '#' && !in_token) {
-            break;
-        }
-
-        if (!in_token || std::isspace(static_cast<unsigned char>(ch)) ||
-            ch == '<' || ch == '>' || (ch == '2' && i + 1 < cmd_str.length() && cmd_str[i + 1] == '>')) {
-
-            if (ch == '2' && i + 1 < cmd_str.length() && cmd_str[i + 1] == '>') {
-                if (in_token) {
-                    raw_tokens.push_back(current);
-                    current.clear();
-                    in_token = false;
-                }
-                if (i + 2 < cmd_str.length() && cmd_str[i + 2] == '>') {
-                    raw_tokens.push_back("2>>");
-                    i += 2;
-                } else {
-                    raw_tokens.push_back("2>");
-                    i += 1;
-                }
-                continue;
-            } else if (ch == '>') {
-                if (in_token) {
-                    raw_tokens.push_back(current);
-                    current.clear();
-                    in_token = false;
-                }
-                if (i + 1 < cmd_str.length() && cmd_str[i + 1] == '>') {
-                    raw_tokens.push_back(">>");
-                    i += 1;
-                } else {
-                    raw_tokens.push_back(">");
-                }
-                continue;
-            } else if (ch == '<') {
-                if (in_token) {
-                    raw_tokens.push_back(current);
-                    current.clear();
-                    in_token = false;
-                }
-                raw_tokens.push_back("<");
-                continue;
-            }
-        }
-
-        if (std::isspace(static_cast<unsigned char>(ch))) {
-            if (in_token) {
-                raw_tokens.push_back(current);
-                current.clear();
-                in_token = false;
-            }
-        } else {
-            current.push_back(ch);
-            in_token = true;
-        }
-    }
-
-    if (in_token) {
-        raw_tokens.push_back(current);
-    }
-
-    for (size_t i = 0; i < raw_tokens.size(); ++i) {
-        const std::string& tok = raw_tokens[i];
-
+    
+    // First tokenize respecting quotes and expanding variables using Expander
+    std::vector<std::string> tokens = Expander::expand_and_split(cmd_str, last_status);
+    
+    // Then process redirections
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const std::string& tok = tokens[i];
+        
         if (tok == "<" || tok == ">" || tok == ">>" || tok == "2>" || tok == "2>>") {
-            if (i + 1 >= raw_tokens.size()) {
+            if (i + 1 >= tokens.size()) {
                 print_error("syntax error", "near unexpected token 'newline'");
                 return Command{};
             }
-            const std::string& target = raw_tokens[++i];
-
+            // Expand variables in redirection target filename (already expanded, but do it again for safety)
+            std::string target = Expander::expand_vars(tokens[++i], last_status);
+            
             if (tok == "<") {
                 cmd.redirections.push_back({Redirection::Type::INPUT, target});
             } else if (tok == ">") {
@@ -99,56 +38,110 @@ Command Parser::parse_command(const std::string& cmd_str) {
             cmd.args.push_back(tok);
         }
     }
-
+    
     return cmd;
 }
 
-Pipeline Parser::parse_line(const std::string& line) {
+Pipeline Parser::parse_line(const std::string& line, int last_status) {
     Pipeline pipeline;
     std::string cleaned = line;
 
-    // Strip comments first
-    size_t comment_pos = cleaned.find('#');
-    if (comment_pos != std::string::npos) {
-        cleaned = cleaned.substr(0, comment_pos);
+    // Strip comments first (but not inside quotes)
+    std::string no_comments;
+    bool in_single_quote = false;
+    bool in_double_quote = false;
+    for (size_t i = 0; i < cleaned.size(); ++i) {
+        char c = cleaned[i];
+        if (!in_double_quote && c == '\'') {
+            in_single_quote = !in_single_quote;
+        } else if (!in_single_quote && c == '"') {
+            in_double_quote = !in_double_quote;
+        } else if (c == '#' && !in_single_quote && !in_double_quote) {
+            break;  // Rest of line is comment
+        }
+        no_comments.push_back(c);
     }
+    cleaned = no_comments;
 
     // Trim trailing/leading whitespace
     size_t first = cleaned.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) {
         return pipeline; // empty
     }
-    // Check for trailing '&' background operator
-    if (!cleaned.empty() && cleaned.back() == '&') {
-        pipeline.background = true;
-        cleaned.pop_back();
-        // Trim again after removing '&'
-        size_t last = cleaned.find_last_not_of(" \t\r\n");
-        if (last == std::string::npos) {
-            return pipeline;
+    
+    // Check for trailing '&' background operator (not inside quotes)
+    in_single_quote = false;
+    in_double_quote = false;
+    for (size_t i = cleaned.size(); i-- > 0; ) {
+        char c = cleaned[i];
+        if (!in_double_quote && c == '\'') {
+            in_single_quote = !in_single_quote;
+        } else if (!in_single_quote && c == '"') {
+            in_double_quote = !in_double_quote;
+        } else if (std::isspace(static_cast<unsigned char>(c)) && !in_single_quote && !in_double_quote) {
+            // whitespace, continue
+        } else if (!in_single_quote && !in_double_quote && c == '&') {
+            pipeline.background = true;
+            cleaned = cleaned.substr(0, i);
+            // Trim again after removing '&'
+            size_t new_last = cleaned.find_last_not_of(" \t\r\n");
+            if (new_last != std::string::npos) {
+                cleaned = cleaned.substr(0, new_last + 1);
+            } else {
+                cleaned.clear();
+            }
+            break;
+        } else {
+            break;
         }
-        cleaned = cleaned.substr(0, last + 1);
     }
 
-    // Split by pipe character '|'
+    // Split by pipe character '|' (not inside quotes)
     std::vector<std::string> stage_strings;
     std::string current_stage;
+    in_single_quote = false;
+    in_double_quote = false;
 
-    for (size_t i = 0; i < cleaned.length(); ++i) {
+    for (size_t i = 0; i < cleaned.size(); ++i) {
         char ch = cleaned[i];
-        if (ch == '|') {
-            if (current_stage.find_first_not_of(" \t\r\n") == std::string::npos) {
+        
+        if (!in_double_quote && ch == '\'') {
+            in_single_quote = !in_single_quote;
+            current_stage.push_back(ch);
+        } else if (!in_single_quote && ch == '"') {
+            in_double_quote = !in_double_quote;
+            current_stage.push_back(ch);
+        } else if (ch == '|' && !in_single_quote && !in_double_quote) {
+            // Check for empty stage
+            bool only_ws = true;
+            for (char c : current_stage) {
+                if (!std::isspace(static_cast<unsigned char>(c))) {
+                    only_ws = false;
+                    break;
+                }
+            }
+            if (only_ws) {
                 print_error("syntax error", "near unexpected token '|'");
                 return Pipeline{};
             }
             stage_strings.push_back(current_stage);
             current_stage.clear();
+            in_single_quote = false;
+            in_double_quote = false;
         } else {
             current_stage.push_back(ch);
         }
     }
 
-    if (current_stage.find_first_not_of(" \t\r\n") == std::string::npos) {
+    // Check final stage
+    bool only_ws = true;
+    for (char c : current_stage) {
+        if (!std::isspace(static_cast<unsigned char>(c))) {
+            only_ws = false;
+            break;
+        }
+    }
+    if (only_ws) {
         if (!stage_strings.empty()) {
             print_error("syntax error", "near unexpected token '|'");
             return Pipeline{};
@@ -158,7 +151,7 @@ Pipeline Parser::parse_line(const std::string& line) {
     }
 
     for (const auto& stage_str : stage_strings) {
-        Command cmd = parse_command(stage_str);
+        Command cmd = parse_command(stage_str, last_status);
         if (cmd.empty()) {
             return Pipeline{};
         }

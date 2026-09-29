@@ -73,7 +73,7 @@ int Shell::run() {
             continue;
         }
 
-        Pipeline pipeline = Parser::parse_line(line);
+        Pipeline pipeline = Parser::parse_line(line, last_status_);
         if (pipeline.empty()) {
             continue;
         }

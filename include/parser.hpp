@@ -37,8 +37,8 @@ struct Pipeline {
 
 class Parser {
 public:
-    static Command parse_command(const std::string& cmd_str);
-    static Pipeline parse_line(const std::string& line);
+    static Command parse_command(const std::string& cmd_str, int last_status = 0);
+    static Pipeline parse_line(const std::string& line, int last_status = 0);
 };
 
 } // namespace aegissh

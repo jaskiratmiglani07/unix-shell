@@ -30,19 +30,20 @@ assert_eq() {
 echo "=== Running Phase 3 Test Suite for AegisShell (Redirection) ==="
 
 # Test 1: Output truncation (>)
+# Quotes are syntax, not literal - they should be stripped
 printf "echo 'hello truncation' > $TMP_DIR/out1.txt\nexit\n" | $SHELL_BIN > /dev/null
 CONTENT=$(cat "$TMP_DIR/out1.txt")
-assert_eq "stdout redirection >" "'hello truncation'" "$CONTENT"
+assert_eq "stdout redirection >" "hello truncation" "$CONTENT"
 
 # Overwrite out1.txt to verify truncation
 printf "echo 'second line' > $TMP_DIR/out1.txt\nexit\n" | $SHELL_BIN > /dev/null
 CONTENT=$(cat "$TMP_DIR/out1.txt")
-assert_eq "stdout truncation overwrites file" "'second line'" "$CONTENT"
+assert_eq "stdout truncation overwrites file" "second line" "$CONTENT"
 
 # Test 2: Output append (>>)
 printf "echo 'line 1' > $TMP_DIR/out2.txt\necho 'line 2' >> $TMP_DIR/out2.txt\nexit\n" | $SHELL_BIN > /dev/null
 CONTENT=$(cat "$TMP_DIR/out2.txt")
-EXPECTED=$(printf "'line 1'\n'line 2'")
+EXPECTED=$(printf "line 1\nline 2")
 assert_eq "stdout append >>" "$EXPECTED" "$CONTENT"
 
 # Test 3: Input redirection (<)
