@@ -3,6 +3,7 @@
 #include "executor.hpp"
 #include "common.hpp"
 #include "jobs.hpp"
+#include "history.hpp"
 
 #include <iostream>
 #include <unistd.h>
@@ -16,6 +17,14 @@ namespace aegissh {
 Shell::Shell() {
     interactive_ = (isatty(STDIN_FILENO) != 0);
     SignalHandler::init_shell_signals();
+    
+    // Load history from file
+    History::instance().load_from_file(History::instance().default_history_file());
+}
+
+Shell::~Shell() {
+    // Save history on exit
+    History::instance().save_to_file(History::instance().default_history_file());
 }
 
 std::string Shell::get_formatted_cwd() {
@@ -78,6 +87,11 @@ int Shell::run() {
             continue;
         }
 
+        // Add to history (only non-empty, non-history commands)
+        if (!line.empty() && !is_history_command(line)) {
+            History::instance().add(line);
+        }
+
         bool should_exit = false;
         last_status_ = Executor::execute_pipeline(pipeline, last_status_, should_exit);
 
@@ -88,6 +102,15 @@ int Shell::run() {
     }
 
     return last_status_;
+}
+
+bool Shell::is_history_command(const std::string& line) {
+    // Check if the command is a history builtin (after parsing)
+    // Simple check: trim and see if it starts with "history"
+    size_t first = line.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return false;
+    return line.compare(first, 7, "history") == 0 && 
+           (first + 7 >= line.size() || std::isspace(static_cast<unsigned char>(line[first + 7])));
 }
 
 } // namespace aegissh

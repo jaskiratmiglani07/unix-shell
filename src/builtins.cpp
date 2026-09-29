@@ -1,8 +1,11 @@
 #include "builtins.hpp"
+#include "history.hpp"
 #include "common.hpp"
 #include <unistd.h>
 #include <climits>
 #include <cstdlib>
+#include <iostream>
+#include <iomanip>
 
 extern char **environ;
 
@@ -24,7 +27,7 @@ bool Builtins::is_valid_identifier(const std::string& name) {
 bool Builtins::is_builtin(const std::string& name) {
     return name == "pwd" || name == "exit" || name == "cd" ||
            name == "echo" || name == "env" || name == "export" ||
-           name == "unset";
+           name == "unset" || name == "history";
 }
 
 int Builtins::execute(const std::vector<std::string>& args, int last_status, bool& should_exit) {
@@ -45,6 +48,8 @@ int Builtins::execute(const std::vector<std::string>& args, int last_status, boo
         return builtin_export(args);
     } else if (cmd == "unset") {
         return builtin_unset(args);
+    } else if (cmd == "history") {
+        return builtin_history(args);
     }
 
     return 1;
@@ -211,6 +216,28 @@ int Builtins::builtin_unset(const std::vector<std::string>& args) {
         }
     }
     return rc;
+}
+
+int Builtins::builtin_history(const std::vector<std::string>& args) {
+    auto& hist = History::instance();
+    const auto& all = hist.get_all();
+    
+    // Print history with right-aligned numbers (bash style)
+    size_t total = all.size();
+    size_t width = 1;
+    size_t temp = total;
+    while (temp >= 10) {
+        width++;
+        temp /= 10;
+    }
+    // Minimum width of 5 for alignment with bash
+    if (width < 5) width = 5;
+    
+    size_t idx = 1;
+    for (const auto& cmd : all) {
+        std::cout << std::setw(width) << idx++ << "  " << cmd << "\n";
+    }
+    return 0;
 }
 
 } // namespace aegissh
