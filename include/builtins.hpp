@@ -19,6 +19,9 @@ private:
     static int builtin_export(const std::vector<std::string>& args);
     static int builtin_unset(const std::vector<std::string>& args);
     static int builtin_history(const std::vector<std::string>& args);
+    static int builtin_fg(const std::vector<std::string>& args);
+    static int builtin_bg(const std::vector<std::string>& args);
+    static int builtin_jobs(const std::vector<std::string>& args);
 
     static bool is_valid_identifier(const std::string& name);
 };

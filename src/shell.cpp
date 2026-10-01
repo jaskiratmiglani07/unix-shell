@@ -18,6 +18,11 @@ Shell::Shell() {
     interactive_ = (isatty(STDIN_FILENO) != 0);
     SignalHandler::init_shell_signals();
     
+    // Initialize job control if interactive
+    if (interactive_) {
+        JobManager::instance().save_shell_terminal();
+    }
+    
     // Load history from file
     History::instance().load_from_file(History::instance().default_history_file());
 }

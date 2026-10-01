@@ -1,5 +1,6 @@
 #include "builtins.hpp"
 #include "history.hpp"
+#include "jobs.hpp"
 #include "common.hpp"
 #include <unistd.h>
 #include <climits>
@@ -27,7 +28,8 @@ bool Builtins::is_valid_identifier(const std::string& name) {
 bool Builtins::is_builtin(const std::string& name) {
     return name == "pwd" || name == "exit" || name == "cd" ||
            name == "echo" || name == "env" || name == "export" ||
-           name == "unset" || name == "history";
+           name == "unset" || name == "history" ||
+           name == "fg" || name == "bg" || name == "jobs";
 }
 
 int Builtins::execute(const std::vector<std::string>& args, int last_status, bool& should_exit) {
@@ -50,6 +52,12 @@ int Builtins::execute(const std::vector<std::string>& args, int last_status, boo
         return builtin_unset(args);
     } else if (cmd == "history") {
         return builtin_history(args);
+    } else if (cmd == "fg") {
+        return builtin_fg(args);
+    } else if (cmd == "bg") {
+        return builtin_bg(args);
+    } else if (cmd == "jobs") {
+        return builtin_jobs(args);
     }
 
     return 1;
@@ -238,6 +246,76 @@ int Builtins::builtin_history(const std::vector<std::string>& args) {
         std::cout << std::setw(width) << idx++ << "  " << cmd << "\n";
     }
     return 0;
+}
+
+int Builtins::builtin_jobs(const std::vector<std::string>& /*args*/) {
+    auto& jm = JobManager::instance();
+    const auto& jobs = jm.get_all_jobs();
+    
+    for (const auto& job : jobs) {
+        std::string state_str;
+        switch (job.state) {
+            case JobState::RUNNING: state_str = "Running"; break;
+            case JobState::STOPPED: state_str = "Stopped"; break;
+            case JobState::DONE: state_str = "Done"; break;
+        }
+        std::cout << "[" << job.id << "]+  " << state_str << "                 " << job.cmdline << "\n";
+    }
+    return 0;
+}
+
+int Builtins::builtin_fg(const std::vector<std::string>& args) {
+    auto& jm = JobManager::instance();
+    
+    int job_id = 0;
+    if (args.size() > 1) {
+        // Parse job ID from argument (e.g., %1 or 1)
+        std::string arg = args[1];
+        if (arg[0] == '%') arg = arg.substr(1);
+        try {
+            job_id = std::stoi(arg);
+        } catch (...) {
+            print_error("fg", "invalid job ID: " + args[1]);
+            return 1;
+        }
+    } else {
+        // Use current job (most recent)
+        Job* job = jm.get_current_job();
+        if (!job) {
+            print_error("fg", "no current job");
+            return 1;
+        }
+        job_id = job->id;
+    }
+    
+    return jm.fg_job(job_id);
+}
+
+int Builtins::builtin_bg(const std::vector<std::string>& args) {
+    auto& jm = JobManager::instance();
+    
+    int job_id = 0;
+    if (args.size() > 1) {
+        // Parse job ID from argument (e.g., %1 or 1)
+        std::string arg = args[1];
+        if (arg[0] == '%') arg = arg.substr(1);
+        try {
+            job_id = std::stoi(arg);
+        } catch (...) {
+            print_error("bg", "invalid job ID: " + args[1]);
+            return 1;
+        }
+    } else {
+        // Use current job (most recent)
+        Job* job = jm.get_current_job();
+        if (!job) {
+            print_error("bg", "no current job");
+            return 1;
+        }
+        job_id = job->id;
+    }
+    
+    return jm.bg_job(job_id);
 }
 
 } // namespace aegissh

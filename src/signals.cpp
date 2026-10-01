@@ -37,10 +37,10 @@ void SignalHandler::init_shell_signals() {
     sigemptyset(&sa_chld.sa_mask);
     sigaction(SIGCHLD, &sa_chld, nullptr);
 
-    // Shell ignores SIGQUIT, SIGTSTP, SIGTTIN, SIGTTOU (terminal job-control
+    // Shell ignores SIGQUIT, SIGTTIN, SIGTTOU (terminal job-control
     // signals that would otherwise stop or core-dump the shell itself).
+    // SIGTSTP is NOT ignored - we let it stop the foreground job.
     signal(SIGQUIT, SIG_IGN);
-    signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
     // Also ignore SIGPIPE so that writing to a broken pipe in a pipeline does
